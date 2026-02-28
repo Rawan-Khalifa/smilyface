@@ -3,9 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import base64
 import json
+import os
+import tempfile
 import uuid
 from datetime import datetime
+from faster_whisper import WhisperModel
 from orchestrator import PitchMind
+
+print("Loading Whisper model...")
+whisper_model = WhisperModel("base", device="cpu", compute_type="int8")
+print("✓ Whisper model loaded")
 
 app = FastAPI()
 app.add_middleware(
@@ -93,6 +100,59 @@ async def websocket_session(websocket: WebSocket):
             # ── Audio chunk from mic ─────────────────────────────
             elif msg["type"] == "audio":
                 audio_bytes = base64.b64decode(msg["data"])
+
+                # Transcribe with faster-whisper
+                transcript_text = ""
+                tmp_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        suffix=".webm", delete=False
+                    ) as f:
+                        f.write(audio_bytes)
+                        tmp_path = f.name
+
+                    segments, _ = whisper_model.transcribe(
+                        tmp_path, language="en"
+                    )
+                    transcript_text = " ".join(
+                        seg.text for seg in segments
+                    ).strip()
+                except Exception as e:
+                    print(f"Whisper transcription error: {e}")
+                finally:
+                    if tmp_path and os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+
+                if transcript_text:
+                    lang_result = await orch.process_transcript(
+                        transcript_text
+                    )
+                    await websocket.send_json({
+                        "type": "transcript",
+                        "text": transcript_text,
+                        "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        "jargon_flags": lang_result.get(
+                            "jargon_flags", []
+                        ),
+                    })
+                    if (
+                        lang_result.get("needs_intervention")
+                        and lang_result.get("suggestion")
+                    ):
+                        await websocket.send_json({
+                            "type": "coaching",
+                            "category": "JARGON_ALERT",
+                            "message": lang_result["suggestion"],
+                            "jargon_flags": lang_result.get(
+                                "jargon_flags", []
+                            ),
+                            "via_earbuds": True,
+                            "timestamp": datetime.now().strftime(
+                                "%H:%M:%S"
+                            ),
+                        })
+
+                # Audio signal processing (pace, energy)
                 result = await orch.process_audio(audio_bytes)
                 await websocket.send_json({
                     "type": "audio_signals",

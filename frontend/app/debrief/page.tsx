@@ -1,15 +1,119 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useMeeting } from '@/lib/meeting-context'
 import { DebriefTimeline } from '@/components/debrief/debrief-timeline'
-import { ArrowRight, TrendingUp, AlertTriangle, Star, MessageCircle } from 'lucide-react'
+import { ArrowRight, TrendingUp, AlertTriangle, Star, MessageCircle, Loader2 } from 'lucide-react'
+
+interface DebriefMemoryEvent {
+  type: 'emotion' | 'transcript' | 'audio'
+  data: Record<string, unknown>
+  time: string
+}
+
+interface DebriefResponse {
+  debrief: {
+    total_events: number
+    memory: DebriefMemoryEvent[]
+    context: Record<string, unknown>
+  }
+  status: string
+}
 
 export default function DebriefPage() {
   const router = useRouter()
-  const { session, resetSession } = useMeeting()
+  const { session, dispatch, resetSession } = useMeeting()
   const { emotionHistory, transcript, coaching, moments } = session
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const sessionId = sessionStorage.getItem('pitchmind_session_id')
+    if (!sessionId) {
+      setLoading(false)
+      return
+    }
+
+    async function fetchDebrief() {
+      try {
+        const res = await fetch('http://localhost:8000/api/session/end', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId }),
+        })
+        if (!res.ok) throw new Error(`Server responded ${res.status}`)
+
+        const result: DebriefResponse = await res.json()
+        const memory = result.debrief?.memory ?? []
+
+        // Only hydrate from server if the in-memory session has no data
+        if (session.transcript.length === 0 && memory.length > 0) {
+          let coachIdx = 0
+          for (const event of memory) {
+            const ts = new Date(event.time).toLocaleTimeString('en-US', {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+              hour12: false,
+            })
+            if (event.type === 'emotion') {
+              const d = event.data as { score?: number; signal?: string }
+              const score = d.score ?? 50
+              dispatch({
+                type: 'UPDATE_EMOTION',
+                payload: {
+                  score,
+                  emotions: {
+                    engaged: Math.max(0, score - 10),
+                    neutral: 20,
+                    confused: Math.max(0, 50 - score),
+                    checked_out: Math.max(0, 30 - Math.floor(score / 3)),
+                  },
+                  timestamp: ts,
+                },
+              })
+            } else if (event.type === 'transcript') {
+              const d = event.data as {
+                text?: string
+                jargon_flags?: string[]
+                needs_intervention?: boolean
+                suggestion?: string
+              }
+              if (d.text) {
+                dispatch({
+                  type: 'ADD_TRANSCRIPT',
+                  payload: {
+                    text: d.text,
+                    timestamp: ts,
+                    jargonFlags: d.jargon_flags ?? [],
+                  },
+                })
+              }
+              if (d.needs_intervention && d.suggestion) {
+                dispatch({
+                  type: 'ADD_COACHING',
+                  payload: {
+                    id: `debrief-coach-${++coachIdx}`,
+                    category: 'JARGON ALERT',
+                    message: d.suggestion,
+                    viaEarbuds: true,
+                    timestamp: ts,
+                  },
+                })
+              }
+            }
+          }
+        }
+      } catch {
+        // debrief fetch failed — UI will use whatever is in memory
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchDebrief()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const avgEngagement = useMemo(() => {
     if (emotionHistory.length === 0) return 0
@@ -23,6 +127,12 @@ export default function DebriefPage() {
     [transcript]
   )
 
+  const jargonWords = useMemo(() => {
+    const words = new Set<string>()
+    transcript.forEach((t) => t.jargonFlags.forEach((j) => words.add(j)))
+    return Array.from(words)
+  }, [transcript])
+
   const peakMoment = useMemo(() => {
     if (emotionHistory.length === 0) return null
     const peak = emotionHistory.reduce((max, e) => (e.score > max.score ? e : max), emotionHistory[0])
@@ -34,6 +144,34 @@ export default function DebriefPage() {
   }, [emotionHistory, moments])
 
   const coachingCount = coaching.filter((c) => c.viaEarbuds).length
+
+  const workedItems = useMemo(() => {
+    const items: string[] = []
+    if (peakMoment) items.push(`Peak engagement (${peakMoment.timestamp}) — ${peakMoment.label}`)
+    if (coachingCount > 0) items.push(`${coachingCount} real-time coaching whispers delivered`)
+    if (avgEngagement > 50) items.push(`Above-average engagement: ${avgEngagement}/100`)
+    if (items.length === 0) items.push('No standout moments recorded — try a longer session')
+    return items
+  }, [peakMoment, coachingCount, avgEngagement])
+
+  const watchItems = useMemo(() => {
+    const items: string[] = []
+    if (jargonCount > 0) items.push(`${jargonCount} jargon instance${jargonCount > 1 ? 's' : ''} detected: ${jargonWords.slice(0, 4).join(', ')}`)
+    coaching.forEach((c) => {
+      if (c.category === 'PACE') items.push(`Pace alert: ${c.message}`)
+    })
+    if (avgEngagement < 50) items.push(`Low average engagement (${avgEngagement}/100) — simplify your message`)
+    if (items.length === 0) items.push('No major warnings — keep it up')
+    return items
+  }, [jargonCount, jargonWords, coaching, avgEngagement])
+
+  const nextTimeItems = useMemo(() => {
+    const items: string[] = []
+    if (jargonWords.length > 0) items.push(`Prepare simpler alternatives for: ${jargonWords.join(', ')}`)
+    if (transcript.length > 0) items.push(`${transcript.length} transcript chunks captured — review for flow`)
+    items.push('Schedule a follow-up within 48 hours while momentum is high')
+    return items
+  }, [jargonWords, transcript])
 
   const now = new Date()
   const dateStr = now.toLocaleDateString('en-US', {
@@ -48,6 +186,14 @@ export default function DebriefPage() {
   function handleNewMeeting() {
     resetSession()
     router.push('/setup')
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-electric" />
+      </div>
+    )
   }
 
   return (
@@ -106,29 +252,17 @@ export default function DebriefPage() {
           <InsightCard
             borderColor="#22c55e"
             title="What Worked"
-            items={[
-              'Strong opening with concrete chargeback cost numbers',
-              'Case study resonated with CFO — visible engagement spike',
-              'Good recovery after jargon flags with simpler language',
-            ]}
+            items={workedItems}
           />
           <InsightCard
             borderColor="#f59e0b"
             title="Watch Out For"
-            items={[
-              '6 jargon instances — CFO showed confusion at technical terms',
-              'Pace exceeded 140 WPM during the technical deep-dive',
-              'Energy dipped in the final third — vary vocal tone',
-            ]}
+            items={watchItems}
           />
           <InsightCard
             borderColor="#2563eb"
             title="For Next Time"
-            items={[
-              'Lead with ROI calculator earlier — it was the highest engagement point',
-              'Prepare simplified analogies for all technical concepts',
-              'Schedule follow-up within 48 hours while momentum is high',
-            ]}
+            items={nextTimeItems}
           />
         </div>
 
