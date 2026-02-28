@@ -32,6 +32,10 @@ export function useWebSocket(url: string = 'ws://localhost:8000/ws/session') {
       ws.onopen = () => {
         setConnectionStatus('connected')
         retryMsRef.current = INITIAL_RETRY_MS
+        const sessionId = sessionStorage.getItem('pitchmind_session_id')
+        if (sessionId) {
+          ws.send(JSON.stringify({ type: 'init', session_id: sessionId }))
+        }
       }
 
       ws.onmessage = (event) => {
@@ -118,6 +122,12 @@ export function useWebSocket(url: string = 'ws://localhost:8000/ws/session') {
     }
   }, [url, dispatch])
 
+  const send = useCallback((data: Record<string, unknown>) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data))
+    }
+  }, [])
+
   const disconnect = useCallback(() => {
     intentionalCloseRef.current = true
     clearTimeout(reconnectTimeoutRef.current)
@@ -135,5 +145,5 @@ export function useWebSocket(url: string = 'ws://localhost:8000/ws/session') {
     }
   }, [])
 
-  return { state, connectionStatus, connect, disconnect }
+  return { state, connectionStatus, connect, disconnect, send }
 }

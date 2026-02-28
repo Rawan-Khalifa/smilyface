@@ -4,14 +4,15 @@ from datetime import datetime
 from agents.emotion_agent import analyze_frame
 from agents.language_agent import analyze_transcript
 from agents.audio_agent import analyze_audio_chunk
-from tts.voice import speak
+from tts.kokoro import speak
 
 class PitchMind:
     def __init__(self, session_context: dict):
         self.context = session_context
         self.persona = session_context.get("persona", "CFO")
         self.goal = session_context.get("goal", "close the deal")
-        self.jargon_list = session_context.get("jargon_list", [])
+        self.jargon_list = session_context.get("jargon_to_avoid",
+                          session_context.get("jargon_list", []))
 
         self.memory = deque(maxlen=20)  # rolling event log
         self.last_coaching_time = 0
@@ -36,7 +37,7 @@ class PitchMind:
         )
         self.memory.append({
             "type": "transcript",
-            "data": result,
+            "data": {**result, "text": text},
             "time": datetime.now().isoformat()
         })
 
