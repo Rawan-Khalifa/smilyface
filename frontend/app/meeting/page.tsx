@@ -10,7 +10,7 @@ import { EmotionPanel } from '@/components/EmotionPanel'
 import { TranscriptPanel } from '@/components/meeting/transcript-panel'
 import { CoachingFeed } from '@/components/CoachingFeed'
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
+function float32ToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer)
   let binary = ''
   for (let i = 0; i < bytes.length; i++) {
@@ -27,7 +27,7 @@ export default function MeetingPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
   const frameIntervalRef = useRef<ReturnType<typeof setInterval>>()
 
   useEffect(() => {
@@ -36,7 +36,7 @@ export default function MeetingPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Camera + mic capture
+  // Camera + mic capture using AudioWorklet for raw PCM
   useEffect(() => {
     let cancelled = false
 
@@ -72,22 +72,24 @@ export default function MeetingPage() {
           send({ type: 'frame', data: base64 })
         }, 3000)
 
-        // Audio capture every 3s via MediaRecorder
+        // Raw PCM audio capture via AudioWorklet (16kHz float32)
         const audioTrack = stream.getAudioTracks()[0]
         if (audioTrack) {
-          const audioStream = new MediaStream([audioTrack])
-          const recorder = new MediaRecorder(audioStream)
-          mediaRecorderRef.current = recorder
+          const ctx = new AudioContext({ sampleRate: 48000 })
+          audioCtxRef.current = ctx
 
-          recorder.ondataavailable = async (e) => {
-            if (e.data.size > 0) {
-              const buffer = await e.data.arrayBuffer()
-              const base64 = arrayBufferToBase64(buffer)
-              send({ type: 'audio', data: base64 })
-            }
+          await ctx.audioWorklet.addModule('/pcm-processor.js')
+          const source = ctx.createMediaStreamSource(new MediaStream([audioTrack]))
+          const worklet = new AudioWorkletNode(ctx, 'pcm-processor')
+
+          worklet.port.onmessage = (e: MessageEvent) => {
+            const pcmBuffer: ArrayBuffer = e.data.pcm
+            const base64 = float32ToBase64(pcmBuffer)
+            send({ type: 'audio', data: base64, sample_rate: 16000, format: 'float32' })
           }
 
-          recorder.start(3000)
+          source.connect(worklet)
+          worklet.connect(ctx.destination)
         }
       } catch (err) {
         console.error('Failed to start media capture:', err)
@@ -99,7 +101,7 @@ export default function MeetingPage() {
     return () => {
       cancelled = true
       clearInterval(frameIntervalRef.current)
-      mediaRecorderRef.current?.stop()
+      audioCtxRef.current?.close()
       streamRef.current?.getTracks().forEach((t) => t.stop())
     }
   }, [send])
