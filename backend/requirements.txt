@@ -1,5 +1,32 @@
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
-websockets>=14.0
-librosa>=0.10.0
-numpy>=1.24.0
+# Server
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Models
+torch
+transformers
+accelerate
+bitsandbytes
+Pillow
+
+# Speech
+faster-whisper
+pyaudio
+pyttsx3
+
+# Audio analysis
+librosa
+numpy
+soundfile
+
+# Vision
+opencv-python
+
+# Scraping (for Stripe data)
+requests
+beautifulsoup4
+
+# Utilities
+python-dotenv
+scipy
