@@ -1,0 +1,12 @@
+.cursor/
+gguf_model/
+gguf_model_gguf/
+merged_model/
+outputs/
+unsloth_compiled_cache/
+llama.cpp/
+*.pyc
+__pycache__/
+.env
+node_modules/
+.next/
