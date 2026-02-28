@@ -14,6 +14,8 @@ ENERGY_TO_TONE = {
     "LOW": "flat, disengaged",
 }
 
+TREND_WINDOW = 5
+
 
 class PitchMind:
     def __init__(self, session_context: dict):
@@ -33,14 +35,77 @@ class PitchMind:
         self.cooldown_seconds = 8
         self._pending_coaching = []
 
+    # ── Emotion helpers ──────────────────────────────────────────
+
+    def _recent_emotion_entries(self, n: int = TREND_WINDOW) -> list[dict]:
+        entries = [e for e in self.memory if e["type"] == "emotion"]
+        return entries[-n:]
+
+    def _emotion_trend(self) -> tuple[str, float]:
+        """
+        Compute trend direction and average score from recent emotion entries.
+        Returns ("rising" | "falling" | "stable", avg_score).
+        """
+        entries = self._recent_emotion_entries()
+        if len(entries) < 2:
+            if entries:
+                return "stable", entries[-1]["data"].get("score", 50)
+            return "stable", 50.0
+
+        scores = [e["data"].get("score", 50) for e in entries]
+        avg = sum(scores) / len(scores)
+
+        first_half = scores[:len(scores) // 2]
+        second_half = scores[len(scores) // 2:]
+        first_avg = sum(first_half) / len(first_half)
+        second_avg = sum(second_half) / len(second_half)
+
+        diff = second_avg - first_avg
+        if diff > 8:
+            return "rising", avg
+        elif diff < -8:
+            return "falling", avg
+        return "stable", avg
+
     def _latest_emotion(self) -> str:
-        for entry in reversed(self.memory):
-            if entry["type"] == "emotion":
-                data = entry["data"]
-                emotion = data.get("dominant_emotion", "neutral")
-                score = data.get("score", 50)
-                return f"{emotion}, engagement {score}/100"
-        return "unknown"
+        """
+        Rich emotion context string for the language agent, including
+        dominant emotion, score, trend, raw signal, and confidence.
+        """
+        entries = self._recent_emotion_entries()
+        if not entries:
+            return "unknown"
+
+        latest = entries[-1]["data"]
+        emotion = latest.get("dominant_emotion", "neutral")
+        score = latest.get("score", 50)
+        confidence = latest.get("confidence", 0)
+        signal = latest.get("signal", "")
+
+        trend_dir, trend_avg = self._emotion_trend()
+
+        parts = [
+            f"Dominant: {emotion}, engagement {score}/100 (trend: {trend_dir}, avg {trend_avg:.0f})",
+        ]
+
+        if confidence < 0.3:
+            parts.append("Low confidence in reading -- vision model uncertain.")
+
+        if signal:
+            parts.append(f"Body language: {signal[:120]}")
+
+        if trend_dir == "falling":
+            duration_frames = 0
+            for e in reversed(entries):
+                if e["data"].get("score", 50) < 50:
+                    duration_frames += 1
+                else:
+                    break
+            if duration_frames > 1:
+                secs = duration_frames * 3
+                parts.append(f"Engagement below 50 for ~{secs}s.")
+
+        return " | ".join(parts)
 
     def _latest_audio_tone(self) -> str:
         for entry in reversed(self.memory):
@@ -51,11 +116,12 @@ class PitchMind:
                 return f"{ENERGY_TO_TONE.get(energy, 'neutral')}, {pace} WPM"
         return "neutral"
 
+    # ── Processing pipelines ─────────────────────────────────────
+
     async def process_frame(self, frame_base64: str) -> dict:
         loop = asyncio.get_event_loop()
-        deal_ctx = f"Presenting: {self.presenting}. Persona: {self.persona}. Goal: {self.goal}"
         result = await loop.run_in_executor(
-            None, analyze_frame, frame_base64, deal_ctx
+            None, analyze_frame, frame_base64
         )
         self.memory.append({
             "type": "emotion",
@@ -64,7 +130,11 @@ class PitchMind:
         })
 
         score = result.get("score", 50)
-        if score < 30:
+        trend_dir, trend_avg = self._emotion_trend()
+
+        if score < 30 and trend_dir == "falling":
+            self._add_moment("Engagement dropping sharply", "red")
+        elif score < 30:
             self._add_moment("Engagement dropped below 30", "red")
         elif score > 80:
             self._add_moment("High engagement detected", "green")
@@ -125,6 +195,8 @@ class PitchMind:
             "time": datetime.now().isoformat(),
         })
         return result
+
+    # ── Coaching ─────────────────────────────────────────────────
 
     async def coach(self, message: str, category: str, jargon_flags=None):
         now = asyncio.get_event_loop().time()

@@ -11,14 +11,15 @@ print(f"Using device: {DEVICE}")
 # ── PaliGemma 2 (vision — reads audience faces) ──────────────────
 paligemma_model = None
 paligemma_processor = None
+PALIGEMMA_RESOLUTION = 448
 
 try:
     from transformers import (
         PaliGemmaProcessor,
         PaliGemmaForConditionalGeneration,
     )
-    print("Loading PaliGemma 2...")
-    paligemma_id = "google/paligemma2-3b-pt-224"
+    print("Loading PaliGemma 2 (ft-docci-448)...")
+    paligemma_id = "google/paligemma2-3b-ft-docci-448"
     paligemma_processor = PaliGemmaProcessor.from_pretrained(paligemma_id)
     paligemma_model = PaliGemmaForConditionalGeneration.from_pretrained(
         paligemma_id,

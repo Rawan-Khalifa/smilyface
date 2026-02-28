@@ -141,15 +141,14 @@ async def websocket_session(websocket: WebSocket):
             if msg["type"] == "frame":
                 result = await orch.process_frame(msg["data"])
                 score = result.get("score", 50)
+                emotions = result.get("emotions", {
+                    "engaged": 10, "neutral": 60,
+                    "confused": 10, "checked_out": 20,
+                })
                 await websocket.send_json({
                     "type": "emotion",
                     "score": score,
-                    "emotions": {
-                        "engaged": max(0, score - 10),
-                        "neutral": 20,
-                        "confused": max(0, 50 - score),
-                        "checked_out": max(0, 30 - score // 3),
-                    },
+                    "emotions": emotions,
                     "signal": result.get("signal", ""),
                     "timestamp": datetime.now().strftime("%H:%M:%S"),
                 })
