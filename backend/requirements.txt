@@ -1,0 +1,23 @@
+# Server
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Models
+torch
+transformers
+accelerate
+unsloth
+Pillow
+
+# Speech
+faster-whisper
+pyttsx3
+
+# Audio analysis
+librosa
+numpy
+soundfile
+
+# Utilities
+python-dotenv

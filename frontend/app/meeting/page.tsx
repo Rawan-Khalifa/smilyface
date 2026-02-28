@@ -125,8 +125,7 @@ export default function MeetingPage() {
 
   return (
     <div className="flex h-screen flex-col bg-background">
-      {/* Hidden elements for media capture */}
-      <video ref={videoRef} autoPlay playsInline muted className="fixed h-px w-px opacity-0 pointer-events-none" />
+      {/* Hidden canvas for frame capture */}
       <canvas ref={canvasRef} className="hidden" />
 
       <MeetingTopBar title={setupData?.presenting || 'Live Meeting'} />
@@ -135,7 +134,7 @@ export default function MeetingPage() {
       <div className="flex flex-1 gap-px overflow-hidden bg-border">
         {/* Left: Audience */}
         <div className="flex w-[30%] flex-col bg-background p-3">
-          <EmotionPanel />
+          <EmotionPanel videoRef={videoRef} />
         </div>
 
         {/* Middle: Transcript */}

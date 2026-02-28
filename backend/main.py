@@ -17,7 +17,7 @@ print("✓ Whisper model loaded")
 app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -47,6 +47,10 @@ async def end_session(body: dict):
 async def websocket_session(websocket: WebSocket):
     await websocket.accept()
     session_id = None
+    # Stores the first WebM audio chunk which contains the EBML header.
+    # Subsequent chunks are continuation fragments without headers, so we
+    # prepend this to each chunk to make a self-contained decodable file.
+    webm_init_chunk: bytes | None = None
 
     try:
         async for raw in websocket.iter_text():
@@ -87,19 +91,38 @@ async def websocket_session(websocket: WebSocket):
                     "type": "transcript",
                     "text": msg["text"],
                     "timestamp": datetime.now().strftime("%H:%M:%S"),
-                    "jargon_flags": result["jargon_flags"]
+                    "jargon_flags": [],
                 })
-                if result["needs_intervention"] and result["suggestion"]:
-                    coaching = await orch.coach(
-                        result["suggestion"], "JARGON_ALERT",
-                        result["jargon_flags"]
-                    )
-                    if coaching:
-                        await websocket.send_json(coaching)
+                if result.get("action") == "whisper" and result.get("message"):
+                    await websocket.send_json({
+                        "type": "coaching",
+                        "category": "JARGON_ALERT",
+                        "message": result["message"],
+                        "via_earbuds": True,
+                        "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    })
+                elif result.get("action") == "escalate" and result.get("message"):
+                    await websocket.send_json({
+                        "type": "coaching",
+                        "category": "ENGAGEMENT_DROP",
+                        "message": result["message"],
+                        "via_earbuds": True,
+                        "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    })
 
             # ── Audio chunk from mic ─────────────────────────────
             elif msg["type"] == "audio":
-                audio_bytes = base64.b64decode(msg["data"])
+                raw_chunk = base64.b64decode(msg["data"])
+
+                # The first chunk from MediaRecorder contains the EBML/WebM
+                # header. Subsequent chunks are header-less continuation
+                # fragments. Prepend the init chunk so every temp file is a
+                # self-contained, decodable WebM stream.
+                if webm_init_chunk is None:
+                    webm_init_chunk = raw_chunk
+                    audio_bytes = raw_chunk
+                else:
+                    audio_bytes = webm_init_chunk + raw_chunk
 
                 # Transcribe with faster-whisper
                 transcript_text = ""
@@ -131,25 +154,23 @@ async def websocket_session(websocket: WebSocket):
                         "type": "transcript",
                         "text": transcript_text,
                         "timestamp": datetime.now().strftime("%H:%M:%S"),
-                        "jargon_flags": lang_result.get(
-                            "jargon_flags", []
-                        ),
+                        "jargon_flags": [],
                     })
-                    if (
-                        lang_result.get("needs_intervention")
-                        and lang_result.get("suggestion")
-                    ):
+                    if lang_result.get("action") == "whisper" and lang_result.get("message"):
                         await websocket.send_json({
                             "type": "coaching",
                             "category": "JARGON_ALERT",
-                            "message": lang_result["suggestion"],
-                            "jargon_flags": lang_result.get(
-                                "jargon_flags", []
-                            ),
+                            "message": lang_result["message"],
                             "via_earbuds": True,
-                            "timestamp": datetime.now().strftime(
-                                "%H:%M:%S"
-                            ),
+                            "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        })
+                    elif lang_result.get("action") == "escalate" and lang_result.get("message"):
+                        await websocket.send_json({
+                            "type": "coaching",
+                            "category": "ENGAGEMENT_DROP",
+                            "message": lang_result["message"],
+                            "via_earbuds": True,
+                            "timestamp": datetime.now().strftime("%H:%M:%S"),
                         })
 
                 # Audio signal processing (pace, energy)

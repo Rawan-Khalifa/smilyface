@@ -1,20 +1,30 @@
-import pyttsx3
 import threading
 
-engine = pyttsx3.init()
-engine.setProperty("rate", 160)   # slightly slower = clearer whisper
-engine.setProperty("volume", 0.9)
+_engine = None
 
-# Set a good voice if available
-voices = engine.getProperty("voices")
-for voice in voices:
-    if "female" in voice.name.lower() or "samantha" in voice.name.lower():
-        engine.setProperty("voice", voice.id)
-        break
+try:
+    import pyttsx3
+    _engine = pyttsx3.init()
+    _engine.setProperty("rate", 160)
+    _engine.setProperty("volume", 0.9)
+
+    voices = _engine.getProperty("voices")
+    for voice in voices:
+        if "female" in voice.name.lower() or "samantha" in voice.name.lower():
+            _engine.setProperty("voice", voice.id)
+            break
+except Exception as e:
+    print(f"⚠ TTS not available ({e}). Coach whispers will be text-only.")
+
 
 def speak(text: str):
-    """Non-blocking speak — runs in background thread"""
+    """Non-blocking speak -- falls back to print if TTS unavailable."""
+    if _engine is None:
+        print(f"[COACH whisper] {text}")
+        return
+
     def _speak():
-        engine.say(text)
-        engine.runAndWait()
+        _engine.say(text)
+        _engine.runAndWait()
+
     threading.Thread(target=_speak, daemon=True).start()

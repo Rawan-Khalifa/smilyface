@@ -1,19 +1,24 @@
 import base64
-import json
 import re
-from PIL import Image
-import io
 from models.loader import paligemma_model, paligemma_processor, DEVICE
+
 
 def analyze_frame(frame_base64: str, deal_context: str) -> dict:
     """
     Takes a base64 image frame, returns emotion analysis.
+    Falls back to neutral defaults if PaliGemma is not loaded.
     """
+    if paligemma_model is None or paligemma_processor is None:
+        return {"dominant_emotion": "neutral", "score": 50, "signal": "Vision model not loaded"}
+
     try:
+        from PIL import Image
+        import io
+
         img_bytes = base64.b64decode(frame_base64)
         image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
 
-        prompt = f"""Analyze this audience during a sales presentation.
+        prompt = f"""<image>Analyze this audience during a sales presentation.
 Deal context: {deal_context}
 Describe: 1) dominant emotion, 2) engagement level 0-100, 
 3) any confusion or disengagement signals.
@@ -37,7 +42,6 @@ SIGNAL: <one sentence observation>"""
             outputs[0], skip_special_tokens=True
         )
 
-        # Parse response
         emotion = re.search(r"EMOTION:\s*(\w+)", response)
         score = re.search(r"SCORE:\s*(\d+)", response)
         signal = re.search(r"SIGNAL:\s*(.+)", response)

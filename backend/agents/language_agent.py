@@ -1,64 +1,61 @@
-from models.loader import functiongemma_model, functiongemma_tokenizer, DEVICE
+from models.loader import coaching_model, coaching_tokenizer, DEVICE
 import torch
 import json
 
-def analyze_transcript(
+
+def analyze_call_state(
     transcript: str,
+    client_emotion: str,
+    audio_tone: str,
+    call_goal: str,
     persona: str,
-    jargon_list: list[str],
-    goal: str
+    cultural_context: str = "US English",
 ) -> dict:
     """
-    Takes transcript chunk, returns jargon flags + coaching suggestion.
+    Sends full call state to the fine-tuned Gemma 2 coaching model.
+    Returns dict with action, message, and reasoning.
     """
     try:
-        # Simple jargon detection — no model needed, fast
-        found_jargon = [
-            word for word in jargon_list
-            if word.lower() in transcript.lower()
-        ]
+        prompt = f"""<start_of_turn>user
+You are a real-time sales coaching agent. Analyze the following sales call state and decide what action to take.
 
-        if not found_jargon:
-            return {
-                "jargon_flags": [],
-                "needs_intervention": False,
-                "suggestion": None
-            }
+Transcript: {transcript}
+Client emotion: {client_emotion}
+Audio tone: {audio_tone}
+Call goal: {call_goal}
+Persona: {persona}
+Cultural context: {cultural_context}
 
-        # Only call model if jargon detected
-        prompt = f"""You are a real-time sales coach.
-Buyer persona: {persona}
-Meeting goal: {goal}
-The presenter just said: "{transcript}"
-Jargon detected that this buyer won't understand: {found_jargon}
-
-Give one short coaching whisper (max 12 words) to fix this right now.
-Reply with only the coaching message, nothing else."""
-
-        inputs = functiongemma_tokenizer(
-            prompt,
-            return_tensors="pt"
-        ).to(DEVICE)
+Respond with a JSON object containing: action (whisper/stay_silent/log_insight/escalate), message (string or null), reasoning (string).
+<end_of_turn>
+<start_of_turn>model
+"""
+        inputs = coaching_tokenizer(prompt, return_tensors="pt").to(DEVICE)
 
         with torch.no_grad():
-            outputs = functiongemma_model.generate(
+            outputs = coaching_model.generate(
                 **inputs,
-                max_new_tokens=30,
-                do_sample=False,
-                temperature=1.0,
+                max_new_tokens=256,
+                temperature=0.7,
             )
 
-        message = functiongemma_tokenizer.decode(
-            outputs[0][inputs.input_ids.shape[1]:],
-            skip_special_tokens=True
-        ).strip()
+        raw = coaching_tokenizer.decode(
+            outputs[0], skip_special_tokens=True
+        ).split("<start_of_turn>model")[-1].strip()
 
+        result = json.loads(raw)
         return {
-            "jargon_flags": found_jargon,
-            "needs_intervention": True,
-            "suggestion": message
+            "action": result.get("action", "stay_silent"),
+            "message": result.get("message"),
+            "reasoning": result.get("reasoning", ""),
         }
 
+    except json.JSONDecodeError:
+        return {
+            "action": "stay_silent",
+            "message": None,
+            "reasoning": f"Model returned non-JSON: {raw[:200]}",
+        }
     except Exception as e:
         print(f"Language agent error: {e}")
-        return {"jargon_flags": [], "needs_intervention": False}
+        return {"action": "stay_silent", "message": None, "reasoning": str(e)}

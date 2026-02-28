@@ -1,9 +1,13 @@
 'use client'
 
-import { useMemo } from 'react'
+import { useMemo, type RefObject } from 'react'
 import { useMeeting } from '@/lib/meeting-context'
 
-export function AudiencePanel() {
+interface AudiencePanelProps {
+  videoRef?: RefObject<HTMLVideoElement | null>
+}
+
+export function AudiencePanel({ videoRef }: AudiencePanelProps) {
   const { session } = useMeeting()
   const { currentEmotion, emotionHistory } = session
 
@@ -18,7 +22,6 @@ export function AudiencePanel() {
 
   const scoreColor = score > 70 ? '#22c55e' : score > 40 ? '#f59e0b' : '#ef4444'
 
-  // Sparkline from last 60 readings
   const sparklinePoints = useMemo(() => {
     const data = emotionHistory.slice(-60).map((e) => e.score)
     if (data.length < 2) return ''
@@ -47,14 +50,24 @@ export function AudiencePanel() {
         Audience
       </h2>
 
-      {/* Camera feed placeholder */}
-      <div className={`relative flex aspect-video items-center justify-center rounded-md border-2 bg-[#0d0d0d] transition-all ${borderClass}`}>
-        <div className="flex flex-col items-center gap-1 text-muted-foreground">
-          <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" />
-          </svg>
-          <span className="font-mono text-[9px] uppercase tracking-widest">Audience Feed</span>
-        </div>
+      {/* Live camera feed */}
+      <div className={`relative flex aspect-video items-center justify-center overflow-hidden rounded-md border-2 bg-[#0d0d0d] transition-all ${borderClass}`}>
+        {videoRef ? (
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div className="flex flex-col items-center gap-1 text-muted-foreground">
+            <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9a2.25 2.25 0 00-2.25-2.25h-9A2.25 2.25 0 002.25 7.5v9a2.25 2.25 0 002.25 2.25z" />
+            </svg>
+            <span className="font-mono text-[9px] uppercase tracking-widest">Audience Feed</span>
+          </div>
+        )}
       </div>
 
       {/* Emotion chips */}

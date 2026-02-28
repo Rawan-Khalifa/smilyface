@@ -1,26 +1,12 @@
-# Python
-venv/
+.cursor/
+gguf_model/
+gguf_model_gguf/
+merged_model/
+outputs/
+unsloth_compiled_cache/
+llama.cpp/
+*.pyc
 __pycache__/
-*.py[cod]
-*.egg-info/
-dist/
-build/
 .env
-
-# Node / Next.js
 node_modules/
 .next/
-.env*.local
-
-# OS
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-
-# v0 runtime files
-__v0_runtime_loader.js
-__v0_devtools.tsx
-__v0_jsx-dev-runtime.ts
