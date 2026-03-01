@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useMeeting } from '@/lib/meeting-context'
 import { useWebSocket } from '@/hooks/useWebSocket'
+import { useAudioOutputDevice } from '@/hooks/useAudioOutputDevice'
 import { MeetingTopBar } from '@/components/meeting/meeting-top-bar'
 import { MeetingBottomBar } from '@/components/meeting/meeting-bottom-bar'
 import { EmotionPanel } from '@/components/EmotionPanel'
@@ -21,8 +22,9 @@ function float32ToBase64(buffer: ArrayBuffer): string {
 
 export default function MeetingPage() {
   const router = useRouter()
-  const { setupData } = useMeeting()
+  const { setupData, setEarbud, earbud } = useMeeting()
   const { connectionStatus, connect, disconnect, send } = useWebSocket()
+  const { selectedDeviceId, isDeviceConnected } = useAudioOutputDevice()
 
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -35,6 +37,14 @@ export default function MeetingPage() {
     return () => disconnect()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Keep earbud context in sync with live device detection and notify backend
+  useEffect(() => {
+    if (earbud.deviceId) {
+      setEarbud({ deviceId: earbud.deviceId, connected: isDeviceConnected })
+      send({ type: 'earbud_status', connected: isDeviceConnected })
+    }
+  }, [isDeviceConnected, earbud.deviceId, setEarbud, send])
 
   // Camera + mic capture using AudioWorklet for raw PCM
   useEffect(() => {
