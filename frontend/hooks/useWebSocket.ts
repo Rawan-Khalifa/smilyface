@@ -102,7 +102,7 @@ export function useWebSocket(url: string = 'ws://localhost:8000/ws/session') {
             case 'coaching_audio': {
               try {
                 const audioBytes = Uint8Array.from(atob(data.audio), (c) => c.charCodeAt(0))
-                const blob = new Blob([audioBytes], { type: 'audio/wav' })
+                const blob = new Blob([audioBytes], { type: 'audio/mpeg' })
                 const audioUrl = URL.createObjectURL(blob)
                 const audio = new Audio(audioUrl)
                 audio.volume = 0.8

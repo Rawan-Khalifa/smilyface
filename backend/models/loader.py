@@ -19,8 +19,8 @@ paligemma_processor = None
 PALIGEMMA_RESOLUTION = 448
 
 try:
-    print("Loading PaliGemma 2 (ft-docci-448)...")
-    paligemma_id = "google/paligemma2-3b-ft-docci-448"
+    print("Loading PaliGemma 2 (pt-448)...")
+    paligemma_id = "google/paligemma2-3b-pt-448"
     paligemma_processor = PaliGemmaProcessor.from_pretrained(paligemma_id)
     paligemma_model = PaliGemmaForConditionalGeneration.from_pretrained(
         paligemma_id,

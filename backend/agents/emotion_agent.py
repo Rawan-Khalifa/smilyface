@@ -1,27 +1,47 @@
 import base64
 import re
+import time
 import torch
 from models.loader import paligemma_model, paligemma_processor, DEVICE, PALIGEMMA_RESOLUTION
 
+# Map categories to their keywords.
+# Weights indicate positive (engaged) or negative (disengaged) engagement delta.
 EMOTION_CATEGORY = {
     "engaged":     ["attentive", "interested", "engaged", "nodding", "smiling",
-                    "happy", "excited", "leaning"],
-    "neutral":     ["neutral", "calm", "relaxed", "steady"],
-    "confused":    ["confused", "frowning", "puzzled", "uncertain", "squinting"],
+                    "happy", "excited", "leaning", "smile", "grinning", "grin",
+                    "laughing", "focused", "concentrating", "talking", "speaking",
+                    "presenting", "gesturing", "looking at camera",
+                    "looking at the camera", "eye contact", "bright"],
+    "neutral":     ["neutral", "calm", "relaxed", "steady", "sitting", "standing",
+                    "person", "listening"],
+    "confused":    ["confused", "frowning", "puzzled", "uncertain", "squinting",
+                    "furrowed", "tilted head", "raised eyebrow"],
     "checked_out": ["bored", "disengaged", "distracted", "tired", "looking away",
                     "looking down", "phone", "yawning", "arms crossed",
-                    "frustrated", "skeptical"],
+                    "frustrated", "skeptical", "slouching", "slumped",
+                    "looking at phone", "looking at their phone",
+                    "eyes closed", "sleeping"],
 }
 
 KEYWORD_WEIGHTS = {
+    # Negative
     "confused": -20, "bored": -25, "disengaged": -30, "frustrated": -25,
-    "skeptical": -15, "distracted": -20, "tired": -15, "neutral": 0,
+    "skeptical": -15, "distracted": -20, "tired": -15, "frowning": -15,
+    "arms crossed": -15, "looking away": -20, "looking down": -15,
+    "phone": -30, "looking at phone": -30, "looking at their phone": -30,
+    "puzzled": -18, "uncertain": -15, "squinting": -10, "yawning": -25,
+    "slouching": -15, "slumped": -15, "eyes closed": -25, "sleeping": -30,
+    "furrowed": -12, "tilted head": -5, "raised eyebrow": -8,
+    # Neutral
+    "neutral": 0, "calm": 5, "relaxed": 5, "steady": 5,
+    "sitting": 0, "standing": 0, "person": 0, "listening": 5,
+    # Positive
     "attentive": 15, "interested": 20, "engaged": 25, "nodding": 20,
-    "smiling": 25, "happy": 20, "excited": 30, "leaning": 10,
-    "frowning": -15, "arms crossed": -15, "looking away": -20,
-    "looking down": -15, "phone": -30, "calm": 5, "relaxed": 5,
-    "steady": 5, "puzzled": -18, "uncertain": -15, "squinting": -10,
-    "yawning": -25,
+    "smiling": 25, "smile": 25, "grinning": 22, "grin": 22,
+    "happy": 20, "excited": 30, "leaning": 10, "laughing": 25,
+    "focused": 18, "concentrating": 15, "talking": 10, "speaking": 10,
+    "presenting": 10, "gesturing": 12, "looking at camera": 15,
+    "looking at the camera": 15, "eye contact": 18, "bright": 8,
 }
 
 _KEYWORD_TO_CATEGORY = {}
@@ -47,11 +67,13 @@ def analyze_frame(frame_base64: str) -> dict:
         from PIL import Image
         import io
 
+        t0 = time.time()
+
         img_bytes = base64.b64decode(frame_base64)
         image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         image = image.resize((PALIGEMMA_RESOLUTION, PALIGEMMA_RESOLUTION))
 
-        prompt = "<image>Describe the facial expressions, body language, posture, and engagement level of every person visible."
+        prompt = "<image>caption en\n"
 
         inputs = paligemma_processor(
             text=prompt,
@@ -62,7 +84,7 @@ def analyze_frame(frame_base64: str) -> dict:
         with torch.no_grad():
             outputs = paligemma_model.generate(
                 **inputs,
-                max_new_tokens=100,
+                max_new_tokens=120,
                 do_sample=False,
             )
 
@@ -71,8 +93,13 @@ def analyze_frame(frame_base64: str) -> dict:
             outputs[0][input_len:], skip_special_tokens=True
         ).strip()
 
+        elapsed = time.time() - t0
+
         parsed = _parse_emotion(response)
         smoothed_score = _apply_ema(parsed["score"])
+
+        print(f"[Emotion] {elapsed:.1f}s | score={smoothed_score} raw={parsed['score']} "
+              f"dom={parsed['dominant_emotion']} conf={parsed['confidence']:.1f} | {response[:100]}")
 
         return {
             "dominant_emotion": parsed["dominant_emotion"],
@@ -120,10 +147,27 @@ def _parse_emotion(text: str) -> dict:
     """
     text_lower = text.lower()
 
+    # Match multi-word keywords first (longest match wins for overlapping phrases)
     hits: list[tuple[str, int]] = []
-    for keyword, delta in KEYWORD_WEIGHTS.items():
-        if keyword in text_lower:
-            hits.append((keyword, delta))
+    matched_spans: list[tuple[int, int]] = []
+
+    sorted_keywords = sorted(KEYWORD_WEIGHTS.keys(), key=len, reverse=True)
+    for keyword in sorted_keywords:
+        pos = text_lower.find(keyword)
+        if pos >= 0:
+            end = pos + len(keyword)
+            overlaps = any(
+                not (end <= ms or pos >= me) for ms, me in matched_spans
+            )
+            if not overlaps:
+                hits.append((keyword, KEYWORD_WEIGHTS[keyword]))
+                matched_spans.append((pos, end))
+
+    # Filter out the generic "person" / "sitting" / "standing" hits if stronger
+    # signals are present, to avoid diluting the distribution.
+    strong_hits = [(kw, d) for kw, d in hits if abs(d) >= 10]
+    if strong_hits:
+        hits = strong_hits
 
     confidence = min(1.0, len(hits) / 3.0) if hits else 0.0
 

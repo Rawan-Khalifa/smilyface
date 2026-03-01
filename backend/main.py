@@ -139,6 +139,7 @@ async def websocket_session(websocket: WebSocket):
 
             # ── Video frame from camera ──────────────────────────
             if msg["type"] == "frame":
+                print(f"[Frame] received ({len(msg['data'])} chars)")
                 result = await orch.process_frame(msg["data"])
                 score = result.get("score", 50)
                 emotions = result.get("emotions", {
@@ -183,9 +184,13 @@ async def websocket_session(websocket: WebSocket):
                 )
 
                 if transcript_text:
+                    print(f"[Whisper] \"{transcript_text[:120]}\"")
                     lang_result = await orch.process_transcript(
                         transcript_text
                     )
+                    action = lang_result.get("action", "?")
+                    msg_preview = (lang_result.get("message") or "")[:80]
+                    print(f"[Coaching] action={action} msg={msg_preview}")
                     await websocket.send_json({
                         "type": "transcript",
                         "text": transcript_text,

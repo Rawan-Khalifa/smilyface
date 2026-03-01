@@ -205,10 +205,7 @@ class PitchMind:
 
         self.last_coaching_time = now
 
-        loop = asyncio.get_event_loop()
-        audio_b64 = await loop.run_in_executor(
-            None, synthesize_wav_base64, message
-        )
+        audio_b64 = await synthesize_wav_base64(message)
 
         payload = {
             "type": "coaching",

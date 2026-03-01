@@ -11,6 +11,17 @@ TECH_LEVEL_LABELS = {
     4: "Engineer (deep technical detail OK)",
 }
 
+MAX_WHISPER_WORDS = 15
+
+
+def _truncate_message(msg: str | None) -> str | None:
+    if not msg:
+        return msg
+    words = msg.split()
+    if len(words) > MAX_WHISPER_WORDS:
+        return " ".join(words[:MAX_WHISPER_WORDS]) + "..."
+    return msg
+
 
 def analyze_call_state(
     transcript: str,
@@ -37,7 +48,7 @@ def analyze_call_state(
         presenting_section = f"\nTopic being presented: {presenting}" if presenting else ""
 
         prompt = f"""<start_of_turn>user
-You are a real-time sales coaching agent. Analyze the following sales call state and decide what action to take.
+You are a real-time sales coaching whisper agent. You deliver brief earpiece cues to a live presenter.
 
 Transcript: {transcript}
 Client emotion: {client_emotion}
@@ -47,10 +58,13 @@ Persona: {persona}
 Audience technical level: {tech_desc}{presenting_section}{jargon_section}
 Cultural context: {cultural_context}
 
-If the presenter used jargon the audience won't understand, action should be "whisper" with a simpler alternative.
-If engagement is dropping, action should be "escalate" with advice to re-engage.
+Rules:
+- If the presenter used jargon the audience won't understand, action = "whisper" with a simpler alternative.
+- If engagement is dropping, action = "escalate" with advice to re-engage.
+- Otherwise action = "stay_silent".
+- The "message" is whispered into the presenter's earpiece. It MUST be under 12 words — short, direct, actionable. No fluff.
 
-Respond with a JSON object containing: action (whisper/stay_silent/log_insight/escalate), message (string or null), reasoning (string).
+Respond with ONLY a JSON object: {{"action": "whisper|stay_silent|log_insight|escalate", "message": "brief cue or null", "reasoning": "one sentence"}}
 <end_of_turn>
 <start_of_turn>model
 """
@@ -60,7 +74,7 @@ Respond with a JSON object containing: action (whisper/stay_silent/log_insight/e
         with torch.no_grad():
             outputs = coaching_model.generate(
                 **inputs,
-                max_new_tokens=256,
+                max_new_tokens=100,
                 do_sample=True,
                 temperature=0.7,
             )
@@ -69,7 +83,8 @@ Respond with a JSON object containing: action (whisper/stay_silent/log_insight/e
             outputs[0][input_len:], skip_special_tokens=True
         ).strip()
 
-        # Try to extract JSON from the response even if surrounded by text
+        print(f"[LangAgent] raw ({len(raw)} chars): {raw[:200]}")
+
         json_match = None
         for start_char in [raw.find("{"), raw.find("[")]:
             if start_char >= 0:
@@ -86,12 +101,17 @@ Respond with a JSON object containing: action (whisper/stay_silent/log_insight/e
                             continue
 
         if json_match and isinstance(json_match, dict):
+            action = json_match.get("action", "stay_silent")
+            message = _truncate_message(json_match.get("message"))
+            reasoning = json_match.get("reasoning", "")
+            print(f"[LangAgent] action={action} message={message}")
             return {
-                "action": json_match.get("action", "stay_silent"),
-                "message": json_match.get("message"),
-                "reasoning": json_match.get("reasoning", ""),
+                "action": action,
+                "message": message,
+                "reasoning": reasoning,
             }
 
+        print(f"[LangAgent] non-JSON fallback -> stay_silent")
         return {
             "action": "stay_silent",
             "message": None,
