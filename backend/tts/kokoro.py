@@ -1,73 +1,45 @@
 import base64
 import io
+import math
 import struct
-import threading
+import tempfile
+import os
 
-_engine = None
-_lock = threading.Lock()
+import edge_tts
 
-try:
-    import pyttsx3
-    _engine = pyttsx3.init()
-    _engine.setProperty("rate", 170)
-    _engine.setProperty("volume", 0.9)
-
-    voices = _engine.getProperty("voices")
-    for voice in voices:
-        if "female" in voice.name.lower() or "samantha" in voice.name.lower():
-            _engine.setProperty("voice", voice.id)
-            break
-except Exception as e:
-    print(f"⚠ TTS engine not available ({e}). Coach whispers will be text-only.")
+VOICE = "en-US-AriaNeural"
 
 
 def speak(text: str):
-    """Non-blocking speak on server speakers (fallback)."""
-    if _engine is None:
-        print(f"[COACH whisper] {text}")
-        return
-
-    def _speak():
-        try:
-            _engine.say(text)
-            _engine.runAndWait()
-        except Exception:
-            pass
-
-    threading.Thread(target=_speak, daemon=True).start()
+    """Non-blocking speak (prints to console as fallback)."""
+    print(f"[COACH whisper] {text}")
 
 
-def synthesize_wav_base64(text: str, sample_rate: int = 22050) -> str | None:
+async def synthesize_wav_base64(text: str) -> str | None:
     """
-    Generate a WAV audio file from text and return as base64 string.
-    Uses pyttsx3 save_to_file if available; falls back to a simple
-    tone-beep so the frontend always gets *something* audible.
+    Generate MP3 audio from text using edge-tts (neural voice) and return
+    as base64. Falls back to a short notification beep on failure.
     """
-    import tempfile
-    import os
-
     tmp_path = None
     try:
-        if _engine is not None:
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                tmp_path = f.name
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            tmp_path = f.name
 
-            with _lock:
-                _engine.save_to_file(text, tmp_path)
-                _engine.runAndWait()
+        communicate = edge_tts.Communicate(text, VOICE, rate="+10%")
+        await communicate.save(tmp_path)
 
-            with open(tmp_path, "rb") as f:
-                wav_data = f.read()
+        with open(tmp_path, "rb") as f:
+            audio_data = f.read()
 
-            if len(wav_data) > 44:
-                return base64.b64encode(wav_data).decode("ascii")
+        if len(audio_data) > 100:
+            print(f"[TTS] synthesized {len(audio_data)} bytes for: {text[:60]}")
+            return base64.b64encode(audio_data).decode("ascii")
 
-        # Fallback: generate a short notification beep
-        return _generate_beep_wav_base64(sample_rate)
+        return _generate_beep_wav_base64()
 
     except Exception as e:
-        print(f"TTS synthesize error: {e}")
-        return _generate_beep_wav_base64(sample_rate)
+        print(f"[TTS] edge-tts error: {e} — falling back to beep")
+        return _generate_beep_wav_base64()
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
@@ -75,8 +47,6 @@ def synthesize_wav_base64(text: str, sample_rate: int = 22050) -> str | None:
 
 def _generate_beep_wav_base64(sample_rate: int = 22050) -> str:
     """Generate a short notification beep as base64 WAV."""
-    import math
-
     duration = 0.3
     freq = 880
     num_samples = int(sample_rate * duration)

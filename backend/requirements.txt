@@ -12,6 +12,7 @@ Pillow
 
 # Speech
 faster-whisper
+edge-tts
 pyttsx3
 
 # Audio analysis
