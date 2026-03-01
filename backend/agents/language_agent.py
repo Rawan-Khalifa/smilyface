@@ -55,17 +55,19 @@ Respond with a JSON object containing: action (whisper/stay_silent/log_insight/e
 <start_of_turn>model
 """
         inputs = coaching_tokenizer(prompt, return_tensors="pt").to(DEVICE)
+        input_len = inputs["input_ids"].shape[-1]
 
         with torch.no_grad():
             outputs = coaching_model.generate(
                 **inputs,
                 max_new_tokens=256,
+                do_sample=True,
                 temperature=0.7,
             )
 
         raw = coaching_tokenizer.decode(
-            outputs[0], skip_special_tokens=True
-        ).split("<start_of_turn>model")[-1].strip()
+            outputs[0][input_len:], skip_special_tokens=True
+        ).strip()
 
         # Try to extract JSON from the response even if surrounded by text
         json_match = None

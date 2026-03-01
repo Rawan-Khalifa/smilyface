@@ -51,7 +51,7 @@ def analyze_frame(frame_base64: str) -> dict:
         image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         image = image.resize((PALIGEMMA_RESOLUTION, PALIGEMMA_RESOLUTION))
 
-        prompt = "Describe the facial expressions, body language, posture, and engagement level of every person visible."
+        prompt = "<image>Describe the facial expressions, body language, posture, and engagement level of every person visible."
 
         inputs = paligemma_processor(
             text=prompt,
@@ -85,7 +85,9 @@ def analyze_frame(frame_base64: str) -> dict:
         }
 
     except Exception as e:
+        import traceback
         print(f"Emotion agent error: {e}")
+        traceback.print_exc()
         return _fallback(str(e)[:100])
 
 
