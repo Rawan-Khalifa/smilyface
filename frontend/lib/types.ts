@@ -43,12 +43,19 @@ export type MomentMessage = {
   color: 'red' | 'amber' | 'green' | 'blue'
 }
 
+export type CoachingAudioMessage = {
+  type: 'coaching_audio'
+  audio: string
+  message: string
+}
+
 export type WireMessage =
   | TranscriptMessage
   | EmotionMessage
   | CoachingMessage
   | AudioMessage
   | MomentMessage
+  | CoachingAudioMessage
 
 // ---------------------------------------------------------------------------
 // Internal / display types (camelCase, used throughout UI components)

@@ -98,6 +98,21 @@ export function useWebSocket(url: string = 'ws://localhost:8000/ws/session') {
                 },
               })
               break
+
+            case 'coaching_audio': {
+              try {
+                const audioBytes = Uint8Array.from(atob(data.audio), (c) => c.charCodeAt(0))
+                const blob = new Blob([audioBytes], { type: 'audio/wav' })
+                const audioUrl = URL.createObjectURL(blob)
+                const audio = new Audio(audioUrl)
+                audio.volume = 0.8
+                audio.play().catch(() => {})
+                audio.onended = () => URL.revokeObjectURL(audioUrl)
+              } catch {
+                // audio playback not available
+              }
+              break
+            }
           }
         } catch {
           // ignore malformed messages

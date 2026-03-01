@@ -2,11 +2,14 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import base64
+import io
 import json
 import os
+import struct
 import tempfile
 import uuid
 from datetime import datetime
+import numpy as np
 from faster_whisper import WhisperModel
 from orchestrator import PitchMind
 
@@ -24,6 +27,7 @@ app.add_middleware(
 
 sessions = {}
 
+
 @app.post("/api/session/start")
 async def start_session(context: dict):
     session_id = str(uuid.uuid4())
@@ -35,6 +39,7 @@ async def start_session(context: dict):
     }
     return {"session_id": session_id, "status": "ready"}
 
+
 @app.post("/api/session/end")
 async def end_session(body: dict):
     session = sessions.get(body.get("session_id"))
@@ -43,20 +48,84 @@ async def end_session(body: dict):
     debrief = session["orchestrator"].get_debrief()
     return {"debrief": debrief, "status": "complete"}
 
+
+def pcm_to_wav_bytes(pcm: np.ndarray, sample_rate: int = 16000) -> bytes:
+    """Convert float32 PCM numpy array to in-memory WAV bytes for Whisper."""
+    pcm_16 = np.clip(pcm * 32767, -32768, 32767).astype(np.int16)
+    buf = io.BytesIO()
+    num_samples = len(pcm_16)
+    data_size = num_samples * 2
+    buf.write(b"RIFF")
+    buf.write(struct.pack("<I", 36 + data_size))
+    buf.write(b"WAVE")
+    buf.write(b"fmt ")
+    buf.write(struct.pack("<I", 16))
+    buf.write(struct.pack("<H", 1))
+    buf.write(struct.pack("<H", 1))
+    buf.write(struct.pack("<I", sample_rate))
+    buf.write(struct.pack("<I", sample_rate * 2))
+    buf.write(struct.pack("<H", 2))
+    buf.write(struct.pack("<H", 16))
+    buf.write(b"data")
+    buf.write(struct.pack("<I", data_size))
+    buf.write(pcm_16.tobytes())
+    return buf.getvalue()
+
+
+def _transcribe_pcm(pcm_array: np.ndarray, sample_rate: int) -> str:
+    """Synchronous Whisper transcription -- called via run_in_executor."""
+    tmp_path = None
+    try:
+        wav_bytes = pcm_to_wav_bytes(pcm_array, sample_rate)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(wav_bytes)
+            tmp_path = f.name
+
+        segments, _ = whisper_model.transcribe(tmp_path, language="en")
+        return " ".join(seg.text for seg in segments).strip()
+    except Exception as e:
+        print(f"Whisper transcription error: {e}")
+        return ""
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+async def flush_orchestrator_events(ws: WebSocket, orch: PitchMind):
+    """Send any pending coaching and moment messages from the orchestrator."""
+    for coaching in orch.drain_coaching():
+        await ws.send_json({
+            "type": "coaching",
+            "category": coaching["category"],
+            "message": coaching["message"],
+            "via_earbuds": coaching["via_earbuds"],
+            "timestamp": coaching["timestamp"],
+        })
+        audio_b64 = coaching.get("audio_b64")
+        if audio_b64:
+            await ws.send_json({
+                "type": "coaching_audio",
+                "audio": audio_b64,
+                "message": coaching["message"],
+            })
+    for moment in orch.drain_moments():
+        await ws.send_json({
+            "type": "moment",
+            "label": moment["label"],
+            "timestamp": moment["timestamp"],
+            "color": moment["color"],
+        })
+
+
 @app.websocket("/ws/session")
 async def websocket_session(websocket: WebSocket):
     await websocket.accept()
     session_id = None
-    # Stores the first WebM audio chunk which contains the EBML header.
-    # Subsequent chunks are continuation fragments without headers, so we
-    # prepend this to each chunk to make a self-contained decodable file.
-    webm_init_chunk: bytes | None = None
 
     try:
         async for raw in websocket.iter_text():
             msg = json.loads(raw)
 
-            # First message must initialize session
             if msg["type"] == "init":
                 session_id = msg["session_id"]
                 print(f"Session started: {session_id}")
@@ -66,25 +135,27 @@ async def websocket_session(websocket: WebSocket):
             if not session:
                 continue
 
-            orch = session["orchestrator"]
+            orch: PitchMind = session["orchestrator"]
 
             # ── Video frame from camera ──────────────────────────
             if msg["type"] == "frame":
                 result = await orch.process_frame(msg["data"])
+                score = result.get("score", 50)
                 await websocket.send_json({
                     "type": "emotion",
-                    "score": result["score"],
+                    "score": score,
                     "emotions": {
-                        "engaged": max(0, result["score"] - 10),
+                        "engaged": max(0, score - 10),
                         "neutral": 20,
-                        "confused": max(0, 50 - result["score"]),
-                        "checked_out": max(0, 30 - result["score"] // 3)
+                        "confused": max(0, 50 - score),
+                        "checked_out": max(0, 30 - score // 3),
                     },
-                    "signal": result["signal"],
-                    "timestamp": datetime.now().strftime("%H:%M:%S")
+                    "signal": result.get("signal", ""),
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
                 })
+                await flush_orchestrator_events(websocket, orch)
 
-            # ── Transcript chunk from Whisper ────────────────────
+            # ── Transcript chunk (text already transcribed) ──────
             elif msg["type"] == "transcript":
                 result = await orch.process_transcript(msg["text"])
                 await websocket.send_json({
@@ -93,58 +164,24 @@ async def websocket_session(websocket: WebSocket):
                     "timestamp": datetime.now().strftime("%H:%M:%S"),
                     "jargon_flags": [],
                 })
-                if result.get("action") == "whisper" and result.get("message"):
-                    await websocket.send_json({
-                        "type": "coaching",
-                        "category": "JARGON_ALERT",
-                        "message": result["message"],
-                        "via_earbuds": True,
-                        "timestamp": datetime.now().strftime("%H:%M:%S"),
-                    })
-                elif result.get("action") == "escalate" and result.get("message"):
-                    await websocket.send_json({
-                        "type": "coaching",
-                        "category": "ENGAGEMENT_DROP",
-                        "message": result["message"],
-                        "via_earbuds": True,
-                        "timestamp": datetime.now().strftime("%H:%M:%S"),
-                    })
+                await flush_orchestrator_events(websocket, orch)
 
-            # ── Audio chunk from mic ─────────────────────────────
+            # ── Raw PCM audio from AudioWorklet ──────────────────
             elif msg["type"] == "audio":
-                raw_chunk = base64.b64decode(msg["data"])
+                raw_bytes = base64.b64decode(msg["data"])
+                sample_rate = msg.get("sample_rate", 16000)
 
-                # The first chunk from MediaRecorder contains the EBML/WebM
-                # header. Subsequent chunks are header-less continuation
-                # fragments. Prepend the init chunk so every temp file is a
-                # self-contained, decodable WebM stream.
-                if webm_init_chunk is None:
-                    webm_init_chunk = raw_chunk
-                    audio_bytes = raw_chunk
-                else:
-                    audio_bytes = webm_init_chunk + raw_chunk
+                pcm_array = np.frombuffer(raw_bytes, dtype=np.float32)
 
-                # Transcribe with faster-whisper
-                transcript_text = ""
-                tmp_path = None
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        suffix=".webm", delete=False
-                    ) as f:
-                        f.write(audio_bytes)
-                        tmp_path = f.name
+                if len(pcm_array) < 100 or not np.all(np.isfinite(pcm_array)):
+                    continue
 
-                    segments, _ = whisper_model.transcribe(
-                        tmp_path, language="en"
-                    )
-                    transcript_text = " ".join(
-                        seg.text for seg in segments
-                    ).strip()
-                except Exception as e:
-                    print(f"Whisper transcription error: {e}")
-                finally:
-                    if tmp_path and os.path.exists(tmp_path):
-                        os.unlink(tmp_path)
+                loop = asyncio.get_event_loop()
+
+                # Transcribe with faster-whisper (CPU-bound, run off event loop)
+                transcript_text = await loop.run_in_executor(
+                    None, _transcribe_pcm, pcm_array, sample_rate
+                )
 
                 if transcript_text:
                     lang_result = await orch.process_transcript(
@@ -156,30 +193,15 @@ async def websocket_session(websocket: WebSocket):
                         "timestamp": datetime.now().strftime("%H:%M:%S"),
                         "jargon_flags": [],
                     })
-                    if lang_result.get("action") == "whisper" and lang_result.get("message"):
-                        await websocket.send_json({
-                            "type": "coaching",
-                            "category": "JARGON_ALERT",
-                            "message": lang_result["message"],
-                            "via_earbuds": True,
-                            "timestamp": datetime.now().strftime("%H:%M:%S"),
-                        })
-                    elif lang_result.get("action") == "escalate" and lang_result.get("message"):
-                        await websocket.send_json({
-                            "type": "coaching",
-                            "category": "ENGAGEMENT_DROP",
-                            "message": lang_result["message"],
-                            "via_earbuds": True,
-                            "timestamp": datetime.now().strftime("%H:%M:%S"),
-                        })
+                    await flush_orchestrator_events(websocket, orch)
 
-                # Audio signal processing (pace, energy)
-                result = await orch.process_audio(audio_bytes)
+                # Audio signal analysis (pace, energy)
+                result = await orch.process_audio(pcm_array, sample_rate)
                 await websocket.send_json({
                     "type": "audio_signals",
                     "pace_wpm": result["pace_wpm"],
                     "energy": result["energy"],
-                    "timestamp": datetime.now().strftime("%H:%M:%S")
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
                 })
 
     except WebSocketDisconnect:
