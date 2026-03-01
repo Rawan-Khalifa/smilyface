@@ -85,20 +85,14 @@ Respond with ONLY a JSON object: {{"action": "whisper|stay_silent|log_insight|es
 
         print(f"[LangAgent] raw ({len(raw)} chars): {raw[:200]}")
 
+        decoder = json.JSONDecoder()
         json_match = None
-        for start_char in [raw.find("{"), raw.find("[")]:
-            if start_char >= 0:
-                try:
-                    json_match = json.loads(raw[start_char:])
-                    break
-                except json.JSONDecodeError:
-                    end_char = raw.rfind("}") + 1
-                    if end_char > start_char:
-                        try:
-                            json_match = json.loads(raw[start_char:end_char])
-                            break
-                        except json.JSONDecodeError:
-                            continue
+        brace_pos = raw.find("{")
+        if brace_pos >= 0:
+            try:
+                json_match, _ = decoder.raw_decode(raw, brace_pos)
+            except json.JSONDecodeError:
+                pass
 
         if json_match and isinstance(json_match, dict):
             action = json_match.get("action", "stay_silent")

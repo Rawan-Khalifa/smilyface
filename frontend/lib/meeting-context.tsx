@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useReducer, type ReactNode } from 'react'
+import { createContext, useContext, useReducer, useState, useCallback, type ReactNode } from 'react'
 import type {
   SetupData,
   SessionState,
@@ -22,12 +22,19 @@ export type SessionAction =
   | { type: 'ADD_MOMENT'; payload: MomentMarker }
   | { type: 'RESET' }
 
+export interface EarbudState {
+  deviceId: string | null
+  connected: boolean
+}
+
 interface MeetingContextType {
   setupData: SetupData | null
   setSetupData: (data: SetupData) => void
   session: SessionState
   dispatch: React.Dispatch<SessionAction>
   resetSession: () => void
+  earbud: EarbudState
+  setEarbud: (state: EarbudState) => void
 }
 
 const initialSessionState: SessionState = {
@@ -73,12 +80,16 @@ export function MeetingProvider({ children }: { children: ReactNode }) {
     null
   )
   const [session, dispatch] = useReducer(sessionReducer, initialSessionState)
+  const [earbud, setEarbudState] = useState<EarbudState>({ deviceId: null, connected: false })
 
   const setSetupData = (data: SetupData) => setSetupDataState(data)
   const resetSession = () => dispatch({ type: 'RESET' })
+  const setEarbud = useCallback((state: EarbudState) => setEarbudState(state), [])
 
   return (
-    <MeetingContext.Provider value={{ setupData, setSetupData, session, dispatch, resetSession }}>
+    <MeetingContext.Provider
+      value={{ setupData, setSetupData, session, dispatch, resetSession, earbud, setEarbud }}
+    >
       {children}
     </MeetingContext.Provider>
   )

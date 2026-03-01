@@ -34,6 +34,7 @@ class PitchMind:
         self.last_coaching_time = 0
         self.cooldown_seconds = 8
         self._pending_coaching = []
+        self.earbuds_connected = False
 
     # ── Emotion helpers ──────────────────────────────────────────
 
@@ -205,14 +206,16 @@ class PitchMind:
 
         self.last_coaching_time = now
 
-        audio_b64 = await synthesize_wav_base64(message)
+        audio_b64 = None
+        if self.earbuds_connected:
+            audio_b64 = await synthesize_wav_base64(message)
 
         payload = {
             "type": "coaching",
             "category": category,
             "message": message,
             "jargon_flags": jargon_flags or [],
-            "via_earbuds": True,
+            "via_earbuds": self.earbuds_connected,
             "timestamp": datetime.now().strftime("%H:%M:%S"),
             "audio_b64": audio_b64,
         }

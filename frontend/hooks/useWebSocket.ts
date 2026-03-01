@@ -18,7 +18,9 @@ export function useWebSocket(url: string = 'ws://localhost:8000/ws/session') {
   const coachIdRef = useRef(0)
 
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected')
-  const { session: state, dispatch } = useMeeting()
+  const { session: state, dispatch, earbud } = useMeeting()
+  const earbudRef = useRef(earbud)
+  earbudRef.current = earbud
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return
@@ -38,7 +40,7 @@ export function useWebSocket(url: string = 'ws://localhost:8000/ws/session') {
         }
       }
 
-      ws.onmessage = (event) => {
+      ws.onmessage = async (event) => {
         try {
           const data: WireMessage = JSON.parse(event.data)
           switch (data.type) {
@@ -100,12 +102,22 @@ export function useWebSocket(url: string = 'ws://localhost:8000/ws/session') {
               break
 
             case 'coaching_audio': {
+              const { deviceId, connected } = earbudRef.current
+              if (!deviceId || !connected) {
+                console.log('[Coaching] Audio suppressed — no earbud device connected')
+                break
+              }
               try {
                 const audioBytes = Uint8Array.from(atob(data.audio), (c) => c.charCodeAt(0))
                 const blob = new Blob([audioBytes], { type: 'audio/mpeg' })
                 const audioUrl = URL.createObjectURL(blob)
                 const audio = new Audio(audioUrl)
                 audio.volume = 0.8
+                if ('setSinkId' in audio) {
+                  await (audio as unknown as { setSinkId: (id: string) => Promise<void> }).setSinkId(
+                    deviceId
+                  )
+                }
                 audio.play().catch(() => {})
                 audio.onended = () => URL.revokeObjectURL(audioUrl)
               } catch {

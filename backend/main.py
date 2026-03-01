@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import re
 import struct
 import tempfile
 import uuid
@@ -91,6 +92,34 @@ def _transcribe_pcm(pcm_array: np.ndarray, sample_rate: int) -> str:
             os.unlink(tmp_path)
 
 
+_HALLUCINATION_PHRASES = {
+    "thank you", "thanks for watching", "subscribe", "like and subscribe",
+    "see you next time", "bye", "goodbye",
+}
+
+_REPEAT_PATTERN = re.compile(
+    r"^(.{2,30}?)(?:[.,!?\s]+\1){2,}[.,!?\s]*$", re.IGNORECASE
+)
+
+
+def _is_whisper_hallucination(text: str) -> bool:
+    """Detect common Whisper hallucination patterns on low-signal audio."""
+    stripped = text.strip()
+    if len(stripped) < 3:
+        return True
+    words = stripped.split()
+    if len(words) <= 2:
+        return True
+    if _REPEAT_PATTERN.match(stripped):
+        return True
+    unique_words = set(w.lower().strip(".,!?") for w in words)
+    if len(words) >= 4 and len(unique_words) <= 2:
+        return True
+    if stripped.lower().rstrip(".!?, ") in _HALLUCINATION_PHRASES:
+        return True
+    return False
+
+
 async def flush_orchestrator_events(ws: WebSocket, orch: PitchMind):
     """Send any pending coaching and moment messages from the orchestrator."""
     for coaching in orch.drain_coaching():
@@ -137,6 +166,12 @@ async def websocket_session(websocket: WebSocket):
 
             orch: PitchMind = session["orchestrator"]
 
+            if msg["type"] == "earbud_status":
+                connected = msg.get("connected", False)
+                orch.earbuds_connected = connected
+                print(f"[Earbuds] {'connected' if connected else 'disconnected'}")
+                continue
+
             # ── Video frame from camera ──────────────────────────
             if msg["type"] == "frame":
                 print(f"[Frame] received ({len(msg['data'])} chars)")
@@ -176,14 +211,25 @@ async def websocket_session(websocket: WebSocket):
                 if len(pcm_array) < 100 or not np.all(np.isfinite(pcm_array)):
                     continue
 
+                rms = float(np.sqrt(np.mean(pcm_array ** 2)))
+                if rms < 0.01:
+                    # Audio signal analysis still runs on silent chunks
+                    result = await orch.process_audio(pcm_array, sample_rate)
+                    await websocket.send_json({
+                        "type": "audio_signals",
+                        "pace_wpm": result["pace_wpm"],
+                        "energy": result["energy"],
+                        "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    })
+                    continue
+
                 loop = asyncio.get_event_loop()
 
-                # Transcribe with faster-whisper (CPU-bound, run off event loop)
                 transcript_text = await loop.run_in_executor(
                     None, _transcribe_pcm, pcm_array, sample_rate
                 )
 
-                if transcript_text:
+                if transcript_text and not _is_whisper_hallucination(transcript_text):
                     print(f"[Whisper] \"{transcript_text[:120]}\"")
                     lang_result = await orch.process_transcript(
                         transcript_text

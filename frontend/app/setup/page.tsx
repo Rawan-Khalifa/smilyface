@@ -3,16 +3,19 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useMeeting } from '@/lib/meeting-context'
+import { useAudioOutputDevice } from '@/hooks/useAudioOutputDevice'
 import { TagInput } from '@/components/tag-input'
 import { TechLevelSlider } from '@/components/tech-level-slider'
 import { CopilotFeatures } from '@/components/copilot-features'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, Headphones } from 'lucide-react'
 
 const DEFAULT_JARGON = ['webhook', 'idempotency', 'API', '3DS2', 'latency', 'payment_intent']
 
 export default function SetupPage() {
   const router = useRouter()
-  const { setSetupData } = useMeeting()
+  const { setSetupData, setEarbud } = useMeeting()
+  const { outputDevices, selectedDeviceId, isDeviceConnected, isSinkIdSupported, selectDevice } =
+    useAudioOutputDevice()
 
   const [presenting, setPresenting] = useState('')
   const [audience, setAudience] = useState('')
@@ -53,6 +56,7 @@ export default function SetupPage() {
         successCriteria,
         jargonToAvoid: jargon,
       })
+      setEarbud({ deviceId: selectedDeviceId, connected: isDeviceConnected })
 
       router.push('/meeting')
     } catch {
@@ -63,6 +67,7 @@ export default function SetupPage() {
         successCriteria,
         jargonToAvoid: jargon,
       })
+      setEarbud({ deviceId: selectedDeviceId, connected: isDeviceConnected })
       router.push('/meeting')
     } finally {
       setLoading(false)
@@ -147,6 +152,41 @@ export default function SetupPage() {
                 onChange={setJargon}
                 placeholder="Type a word and press Enter"
               />
+            </div>
+
+            <div className="space-y-2">
+              <label className="font-mono text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  <Headphones className="h-3.5 w-3.5" />
+                  Coaching audio device
+                </span>
+              </label>
+              {!isSinkIdSupported ? (
+                <p className="text-xs text-amber-400">
+                  Your browser does not support audio output selection. Coaching audio will play
+                  through the default device. Use Chrome or Edge for earbud routing.
+                </p>
+              ) : (
+                <select
+                  value={selectedDeviceId ?? ''}
+                  onChange={(e) => selectDevice(e.target.value || null)}
+                  className="w-full rounded-md border border-border bg-input px-4 py-3 text-sm text-foreground transition-colors focus:border-electric focus:outline-none"
+                >
+                  <option value="">None (screen-only coaching)</option>
+                  {outputDevices.map((device) => (
+                    <option key={device.deviceId} value={device.deviceId}>
+                      {device.label || `Audio output (${device.deviceId.slice(0, 8)}…)`}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {selectedDeviceId && (
+                <p className={`text-xs ${isDeviceConnected ? 'text-success' : 'text-red-400'}`}>
+                  {isDeviceConnected
+                    ? 'Device connected — coaching will whisper through it'
+                    : 'Device not detected — coaching audio will be suppressed'}
+                </p>
+              )}
             </div>
           </div>
         </div>

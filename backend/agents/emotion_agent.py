@@ -73,7 +73,7 @@ def analyze_frame(frame_base64: str) -> dict:
         image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
         image = image.resize((PALIGEMMA_RESOLUTION, PALIGEMMA_RESOLUTION))
 
-        prompt = "<image>caption en\n"
+        prompt = "<image>answer en Describe the person's facial expression, body language, and emotional state. Are they engaged, confused, bored, or excited?\n"
 
         inputs = paligemma_processor(
             text=prompt,
